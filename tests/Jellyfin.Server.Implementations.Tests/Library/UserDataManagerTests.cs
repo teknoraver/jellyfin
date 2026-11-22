@@ -248,6 +248,80 @@ public sealed class UserDataManagerTests : IDisposable
     }
 
     [Fact]
+    public void SaveUserDataUpdate_StaleItemInstance_KeepsStoredFields()
+    {
+        var item = CreateAudioBook();
+
+        using (var ctx = CreateDbContext())
+        {
+            ctx.Users.Add(_user);
+            ctx.BaseItems.Add(new BaseItemEntity { Id = item.Id, Type = typeof(AudioBook).FullName! });
+            var row = CreateUserDataRow(item, item.GetUserDataKeys()[0], 0);
+            row.IsFavorite = true;
+            ctx.UserData.Add(row);
+            ctx.SaveChanges();
+        }
+
+        // the instance still holds the row from before the favorite was set
+        item.UserData = new List<UserData> { CreateUserDataRow(item, item.GetUserDataKeys()[0], 0) };
+
+        _userDataManager.SaveUserData(
+            _user,
+            item,
+            data =>
+            {
+                data.PlaybackPositionTicks = 444;
+                return true;
+            },
+            UserDataSaveReason.PlaybackProgress,
+            CancellationToken.None);
+
+        using (var ctx = CreateDbContext())
+        {
+            var rows = ctx.UserData.Where(e => e.ItemId.Equals(item.Id)).ToList();
+            Assert.NotEmpty(rows);
+            Assert.All(rows, row =>
+            {
+                Assert.True(row.IsFavorite);
+                Assert.Equal(444, row.PlaybackPositionTicks);
+            });
+        }
+    }
+
+    [Fact]
+    public void SaveUserDataUpdate_CallbackReturnsFalse_DoesNotSave()
+    {
+        var item = CreateAudioBook();
+
+        using (var ctx = CreateDbContext())
+        {
+            ctx.Users.Add(_user);
+            ctx.BaseItems.Add(new BaseItemEntity { Id = item.Id, Type = typeof(AudioBook).FullName! });
+            ctx.SaveChanges();
+        }
+
+        var saved = false;
+        _userDataManager.UserDataSaved += (_, _) => saved = true;
+
+        _userDataManager.SaveUserData(
+            _user,
+            item,
+            data =>
+            {
+                data.IsFavorite = true;
+                return false;
+            },
+            UserDataSaveReason.PlaybackProgress,
+            CancellationToken.None);
+
+        Assert.False(saved);
+        using (var ctx = CreateDbContext())
+        {
+            Assert.Empty(ctx.UserData.Where(e => e.ItemId.Equals(item.Id)));
+        }
+    }
+
+    [Fact]
     public void GetUserData_NullUser_ThrowsArgumentNullException()
     {
         var item = CreateAudioBook();

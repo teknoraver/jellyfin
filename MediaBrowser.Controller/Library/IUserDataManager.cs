@@ -30,6 +30,18 @@ namespace MediaBrowser.Controller.Library
         void SaveUserData(User user, BaseItem item, UserItemData userData, UserDataSaveReason reason, CancellationToken cancellationToken);
 
         /// <summary>
+        /// Loads the stored user data, applies <paramref name="update"/> to it and saves the result,
+        /// so fields the callback doesn't change keep their stored value.
+        /// </summary>
+        /// <param name="user">The user.</param>
+        /// <param name="item">The item.</param>
+        /// <param name="update">Changes the user data; returns <c>false</c> to skip the save.</param>
+        /// <param name="reason">The reason.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns>The user data after the update.</returns>
+        UserItemData SaveUserData(User user, BaseItem item, Func<UserItemData, bool> update, UserDataSaveReason reason, CancellationToken cancellationToken);
+
+        /// <summary>
         /// Save the provided user data for the given user.
         /// </summary>
         /// <param name="user">The user.</param>

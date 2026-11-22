@@ -60,6 +60,52 @@ namespace Emby.Server.Implementations.Library
             using var dbContext = _repository.CreateDbContext();
             using var transaction = dbContext.Database.BeginTransaction();
 
+            WriteUserData(dbContext, user, item, keys, userData);
+
+            transaction.Commit();
+
+            OnUserDataWritten(dbContext, user, item, keys, userData, reason);
+        }
+
+        /// <inheritdoc />
+        public UserItemData SaveUserData(User user, BaseItem item, Func<UserItemData, bool> update, UserDataSaveReason reason, CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(user);
+            ArgumentNullException.ThrowIfNull(item);
+            ArgumentNullException.ThrowIfNull(update);
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var keys = item.GetUserDataKeys();
+
+            using var dbContext = _repository.CreateDbContext();
+            using var transaction = dbContext.Database.BeginTransaction();
+
+            // Read the stored row, not item.UserData: the caller's instance can be older than the
+            // database (a playback session keeps the instance it started with).
+            var rows = dbContext.UserData
+                .AsNoTracking()
+                .Where(e => e.ItemId == item.Id && e.UserId == user.Id)
+                .ToList();
+            var row = ResolveUserDataRow(item, rows);
+            var userData = row is not null ? Map(row) : new UserItemData { Key = keys[0] };
+
+            if (!update(userData))
+            {
+                return userData;
+            }
+
+            WriteUserData(dbContext, user, item, keys, userData);
+
+            transaction.Commit();
+
+            OnUserDataWritten(dbContext, user, item, keys, userData, reason);
+
+            return userData;
+        }
+
+        private void WriteUserData(JellyfinDbContext dbContext, User user, BaseItem item, List<string> keys, UserItemData userData)
+        {
             foreach (var key in keys)
             {
                 userData.Key = key;
@@ -90,9 +136,10 @@ namespace Emby.Server.Implementations.Library
                     .SetProperty(f => f.Played, userData.Played)
                     .SetProperty(f => f.Rating, userData.Rating)
                     .SetProperty(f => f.SubtitleStreamIndex, userData.SubtitleStreamIndex));
+        }
 
-            transaction.Commit();
-
+        private void OnUserDataWritten(JellyfinDbContext dbContext, User user, BaseItem item, List<string> keys, UserItemData userData, UserDataSaveReason reason)
+        {
             var userId = user.InternalId;
             var cacheKey = GetCacheKey(userId, item.Id);
             _cache.AddOrUpdate(cacheKey, userData);
@@ -115,44 +162,50 @@ namespace Emby.Server.Implementations.Library
             ArgumentNullException.ThrowIfNull(item);
             ArgumentNullException.ThrowIfNull(userDataDto);
 
-            var userData = GetUserData(user, item) ?? throw new InvalidOperationException("UserData should not be null.");
+            SaveUserData(
+                user,
+                item,
+                userData =>
+                {
+                    if (userDataDto.PlaybackPositionTicks.HasValue)
+                    {
+                        userData.PlaybackPositionTicks = userDataDto.PlaybackPositionTicks.Value;
+                    }
 
-            if (userDataDto.PlaybackPositionTicks.HasValue)
-            {
-                userData.PlaybackPositionTicks = userDataDto.PlaybackPositionTicks.Value;
-            }
+                    if (userDataDto.PlayCount.HasValue)
+                    {
+                        userData.PlayCount = userDataDto.PlayCount.Value;
+                    }
 
-            if (userDataDto.PlayCount.HasValue)
-            {
-                userData.PlayCount = userDataDto.PlayCount.Value;
-            }
+                    if (userDataDto.IsFavorite.HasValue)
+                    {
+                        userData.IsFavorite = userDataDto.IsFavorite.Value;
+                    }
 
-            if (userDataDto.IsFavorite.HasValue)
-            {
-                userData.IsFavorite = userDataDto.IsFavorite.Value;
-            }
+                    if (userDataDto.Likes.HasValue)
+                    {
+                        userData.Likes = userDataDto.Likes.Value;
+                    }
 
-            if (userDataDto.Likes.HasValue)
-            {
-                userData.Likes = userDataDto.Likes.Value;
-            }
+                    if (userDataDto.Played.HasValue)
+                    {
+                        userData.Played = userDataDto.Played.Value;
+                    }
 
-            if (userDataDto.Played.HasValue)
-            {
-                userData.Played = userDataDto.Played.Value;
-            }
+                    if (userDataDto.LastPlayedDate.HasValue)
+                    {
+                        userData.LastPlayedDate = userDataDto.LastPlayedDate.Value;
+                    }
 
-            if (userDataDto.LastPlayedDate.HasValue)
-            {
-                userData.LastPlayedDate = userDataDto.LastPlayedDate.Value;
-            }
+                    if (userDataDto.Rating.HasValue)
+                    {
+                        userData.Rating = userDataDto.Rating.Value;
+                    }
 
-            if (userDataDto.Rating.HasValue)
-            {
-                userData.Rating = userDataDto.Rating.Value;
-            }
-
-            SaveUserData(user, item, userData, reason, CancellationToken.None);
+                    return true;
+                },
+                reason,
+                CancellationToken.None);
         }
 
         private UserData Map(UserItemData dto, Guid userId, Guid itemId)
