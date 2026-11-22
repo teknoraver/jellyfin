@@ -1,5 +1,6 @@
 using System;
 using System.Reflection;
+using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Database.Implementations.Entities;
 using MediaBrowser.Controller;
@@ -11,6 +12,7 @@ using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Events;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Model.Entities;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -73,8 +75,12 @@ public sealed class RewatchPlayStateTests : IDisposable
     {
         var userDataManager = new Mock<IUserDataManager>();
         userDataManager
-            .Setup(m => m.GetUserData(It.IsAny<User>(), It.IsAny<BaseItem>()))
-            .Returns(data);
+            .Setup(m => m.SaveUserData(It.IsAny<User>(), It.IsAny<BaseItem>(), It.IsAny<Func<UserItemData, bool>>(), It.IsAny<UserDataSaveReason>(), It.IsAny<CancellationToken>()))
+            .Returns<User, BaseItem, Func<UserItemData, bool>, UserDataSaveReason, CancellationToken>((_, _, update, _, _) =>
+            {
+                update(data);
+                return data;
+            });
         userDataManager
             .Setup(m => m.UpdatePlayState(It.IsAny<BaseItem>(), It.IsAny<UserItemData>(), It.IsAny<long?>()))
             .Callback<BaseItem, UserItemData, long?>((_, d, position) => d.PlaybackPositionTicks = position >= ResumeThresholdTicks ? position.Value : 0)

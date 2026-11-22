@@ -843,23 +843,29 @@ namespace Emby.Server.Implementations.Session
         /// <param name="item">The item.</param>
         private void OnPlaybackStart(User user, BaseItem item)
         {
-            var data = _userDataManager.GetUserData(user, item);
+            _userDataManager.SaveUserData(
+                user,
+                item,
+                userData =>
+                {
+                    userData.PlayCount++;
 
-            data.PlayCount++;
+                    // Re-watching a played item only counts once a progress or stop report gets past the resume threshold,
+                    // otherwise rewatch Next Up moves on from an episode that was barely started
+                    if (!userData.Played || !item.SupportsPositionTicksResume)
+                    {
+                        userData.LastPlayedDate = DateTime.UtcNow;
+                    }
 
-            // Re-watching a played item only counts once a progress or stop report gets past the resume threshold,
-            // otherwise rewatch Next Up moves on from an episode that was barely started
-            if (!data.Played || !item.SupportsPositionTicksResume)
-            {
-                data.LastPlayedDate = DateTime.UtcNow;
-            }
+                    if (item.SupportsPlayedStatus && !item.SupportsPositionTicksResume)
+                    {
+                        userData.Played = true;
+                    }
 
-            if (item.SupportsPlayedStatus && !item.SupportsPositionTicksResume)
-            {
-                data.Played = true;
-            }
-
-            _userDataManager.SaveUserData(user, item, data, UserDataSaveReason.PlaybackStart, CancellationToken.None);
+                    return true;
+                },
+                UserDataSaveReason.PlaybackStart,
+                CancellationToken.None);
         }
 
         /// <inheritdoc />
@@ -970,33 +976,39 @@ namespace Emby.Server.Implementations.Session
 
         private void OnPlaybackProgress(User user, BaseItem item, PlaybackProgressInfo info)
         {
-            var data = _userDataManager.GetUserData(user, item);
-
             var positionTicks = info.PositionTicks;
 
             var changed = false;
 
-            if (positionTicks.HasValue)
-            {
-                var playedToCompletion = _userDataManager.UpdatePlayState(item, data, positionTicks.Value);
-                if (playedToCompletion || data.PlaybackPositionTicks > 0)
+            var data = _userDataManager.SaveUserData(
+                user,
+                item,
+                userData =>
                 {
-                    data.LastPlayedDate = DateTime.UtcNow;
-                }
+                    if (positionTicks.HasValue)
+                    {
+                        var playedToCompletion = _userDataManager.UpdatePlayState(item, userData, positionTicks.Value);
+                        if (playedToCompletion || userData.PlaybackPositionTicks > 0)
+                        {
+                            userData.LastPlayedDate = DateTime.UtcNow;
+                        }
 
-                changed = true;
-            }
+                        changed = true;
+                    }
 
-            var tracksChanged = UpdatePlaybackSettings(user, info, data);
-            if (tracksChanged)
-            {
-                changed = true;
-            }
+                    var tracksChanged = UpdatePlaybackSettings(user, info, userData);
+                    if (tracksChanged)
+                    {
+                        changed = true;
+                    }
+
+                    return changed;
+                },
+                UserDataSaveReason.PlaybackProgress,
+                CancellationToken.None);
 
             if (changed)
             {
-                _userDataManager.SaveUserData(user, item, data, UserDataSaveReason.PlaybackProgress, CancellationToken.None);
-
                 // A completed version marks every alternate version played and clears their resume points, so the
                 // whole movie leaves Continue Watching and reads as watched everywhere. (Per-version resume positions
                 // only persist while nothing has been completed yet.)
@@ -1180,27 +1192,34 @@ namespace Emby.Server.Implementations.Session
                 return false;
             }
 
-            var data = _userDataManager.GetUserData(user, item);
-            bool playedToCompletion;
-            if (positionTicks.HasValue)
-            {
-                playedToCompletion = _userDataManager.UpdatePlayState(item, data, positionTicks.Value);
-                if (playedToCompletion || data.PlaybackPositionTicks > 0)
+            var playedToCompletion = false;
+            var data = _userDataManager.SaveUserData(
+                user,
+                item,
+                userData =>
                 {
-                    data.LastPlayedDate = DateTime.UtcNow;
-                }
-            }
-            else
-            {
-                // If the client isn't able to report this, then we'll just have to make an assumption
-                data.PlayCount++;
-                data.Played = item.SupportsPlayedStatus;
-                data.PlaybackPositionTicks = 0;
-                data.LastPlayedDate = DateTime.UtcNow;
-                playedToCompletion = true;
-            }
+                    if (positionTicks.HasValue)
+                    {
+                        playedToCompletion = _userDataManager.UpdatePlayState(item, userData, positionTicks.Value);
+                        if (playedToCompletion || userData.PlaybackPositionTicks > 0)
+                        {
+                            userData.LastPlayedDate = DateTime.UtcNow;
+                        }
+                    }
+                    else
+                    {
+                        // If the client isn't able to report this, then we'll just have to make an assumption
+                        userData.PlayCount++;
+                        userData.Played = item.SupportsPlayedStatus;
+                        userData.PlaybackPositionTicks = 0;
+                        userData.LastPlayedDate = DateTime.UtcNow;
+                        playedToCompletion = true;
+                    }
 
-            _userDataManager.SaveUserData(user, item, data, UserDataSaveReason.PlaybackFinished, CancellationToken.None);
+                    return true;
+                },
+                UserDataSaveReason.PlaybackFinished,
+                CancellationToken.None);
 
             // A completed version marks every alternate version played and clears their resume points, so the
             // whole movie leaves Continue Watching and reads as watched everywhere. (Per-version resume positions
